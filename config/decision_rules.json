@@ -1,0 +1,12 @@
+{
+  "pslist": [
+    "Flag suspicious when process name appears random or known malware-like",
+    "Flag suspicious when parent-child relation is unusual for system processes"
+  ],
+  "vadinfo": [
+    "Increase suspicion when protection includes PAGE_EXECUTE_READWRITE"
+  ],
+  "malfind": [
+    "Increase suspicion when memory region contains MZ header or shellcode-like bytes"
+  ]
+}

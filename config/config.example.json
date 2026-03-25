@@ -1,0 +1,16 @@
+{
+  "volatility_script_path": "~/tools/volatility3/vol.py",
+  "memory_dump_path": "./data/sample.mem",
+  "volatility_plugins": [
+    "windows.pslist",
+    "windows.vadinfo",
+    "windows.malfind"
+  ],
+  "prompt_template_path": "config/prompt_template_v1.txt",
+  "decision_rules_path": "config/decision_rules.json",
+  "openai_model": "gpt-4o-mini",
+  "temperature": 0,
+  "majority_runs": 3,
+  "output_report_path": "results/triage_report.json",
+  "output_votes_path": "results/triage_votes.json"
+}
