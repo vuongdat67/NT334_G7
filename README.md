@@ -55,10 +55,11 @@ Copy and edit `.env.example`:
 cp .env.example .env
 ```
 
-Set your model key (at least one provider):
+Set variables based on your provider:
 
-- `OPENAI_API_KEY`
-- `GEMINI_API_KEY` (optional, later comparison)
+- Local model (LM Studio/Ollama): `LOCAL_LLM_API_KEY=local-not-needed`
+- OpenRouter fallback: `OPENROUTER_API_KEY=...`
+- OpenAI cloud (optional): `OPENAI_API_KEY=...`
 
 ### 4.3 Configure project
 
@@ -72,20 +73,64 @@ Update:
 
 - `volatility_script_path`
 - `memory_dump_path`
-- `openai_model`
+- `llm_model`
+- `llm_api_key_env`
+- `llm_base_url`
 
-### 4.4 Run pipeline
+### 4.4 Provider Presets
+
+Use one of these example configs and copy to your local config:
+
+- `config/config.local_lmstudio.example.json`
+- `config/config.local_ollama.example.json`
+- `config/config.openrouter.example.json`
+
+Example:
+
+```bash
+cp config/config.local_lmstudio.example.json config/config.local.json
+```
+
+### 4.5 Run pipeline
 
 ```bash
 python scripts/run_pipeline.py --config config/config.local.json
 ```
+
+### 4.5.1 Health check before full triage
+
+```bash
+python -m scripts.health_check --config config/config.local.json
+```
+
+This command will:
+
+1. List exact model IDs from your endpoint.
+2. Check whether `llm_model` in config exists.
+3. Send a tiny ping request and print latency.
+
+If you are running from WSL and a configured host IP times out, the health check will automatically probe common alternatives (`localhost`, `127.0.0.1`, and WSL nameserver host IP) and both path styles (`/v1`, `/api/v1`).
 
 Outputs:
 
 - `results/triage_report.json`
 - `results/triage_votes.json`
 
-### 4.5 Run evaluation
+### 4.5.2 Conservative post-filter (false-positive reduction)
+
+The pipeline now supports a conservative post-filter layer after LLM voting.
+
+- Purpose: reduce benign false positives on system processes.
+- Method: system-process allowlist + parent-child sanity checks + low-confidence generic-reason suppression.
+
+Config fields:
+
+- `post_filter_enabled`: enable/disable the filter layer
+- `post_filter_min_conf_keep_for_allowlisted`: confidence threshold for allowlisted processes
+
+When enabled, output report includes a `post_filter` section with dropped items and applied rules.
+
+### 4.6 Run evaluation
 
 ```bash
 python scripts/evaluate.py \
@@ -102,7 +147,24 @@ python scripts/evaluate.py \
 - Phase E: Hallucination reduction (prompt hardening)
 - Phase F: Optional ML baseline (XGBoost)
 
-## 6) Next Immediate Tasks
+## 6) Local Model Recommendation (How many B?)
+
+For this memory-triage task, recommended ranges are:
+
+- Minimum usable: 7B
+- Good local baseline: 8B to 10B
+- Better reasoning: 14B (if your hardware can run it)
+
+Given your current models, suggested order:
+
+1. `glm 4.6 9.4B` (LM Studio) as main local baseline
+2. `deepseek 8B` (Ollama) as second local baseline
+3. `deepseekcode 6.7B` only as fallback (it is code-specialized, less ideal for forensic reasoning)
+4. `llama7B` as minimum baseline
+
+Why this range: process triage needs instruction following + structured JSON output + relationship reasoning; 8B-10B usually gives a better balance than 6B-7B.
+
+## 7) Next Immediate Tasks
 
 1. Connect Volatility 3 command on your machine and validate plugin outputs.
 2. Place 1 sample memory dump and run end-to-end once.
