@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *.pyo
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Secrets
 .env
@@ -15,9 +22,18 @@ results/*.png
 
 # IDE
 .vscode/
-config.local.json
-config.openrouter.json
-config.local_lmstudio.json
-config.local_ollama.json
+
+# Logs
+*.log
 
 data/
+results/
+*.log
+*.out
+*.gz
+*.aux
+*.fdb_latexmk
+*.fls
+
+deliverables/
+docs/

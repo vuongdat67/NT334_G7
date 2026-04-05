@@ -10,7 +10,7 @@
 git clone https://github.com/volatilityfoundation/volatility3.git ~/tools/volatility3
 ```
 
-4. Update `config/config.local.json` with your local `vol.py` path.
+4. Update `config/config.json` with your local `vol.py` path.
 5. Install dependencies from `requirements.txt`.
 
 ## Notes

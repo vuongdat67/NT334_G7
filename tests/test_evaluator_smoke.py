@@ -1,4 +1,4 @@
-from src.evaluator import evaluate
+from src.evaluation.metrics import evaluate
 
 
 def test_smoke(tmp_path):

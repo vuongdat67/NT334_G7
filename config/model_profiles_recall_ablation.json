@@ -1,0 +1,11 @@
+[
+  {
+    "model": "qwen/qwen3.6-plus:free",
+    "provider": "qwen",
+    "token_B": 3370.0,
+    "enabled": true,
+    "prompt_strategy": "high_recall",
+    "prompt_recall_boost": true,
+    "prompt_hallucination_check": true
+  }
+]

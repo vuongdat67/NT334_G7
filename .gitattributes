@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary forensic artifacts
+*.elf binary
+*.mem binary
+*.raw binary
+*.vmem binary
+*.dmp binary
+*.zip binary
+*.7z binary
+*.png binary
+*.jpg binary
+*.jpeg binary

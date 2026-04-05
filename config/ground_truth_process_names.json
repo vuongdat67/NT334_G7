@@ -1,0 +1,36 @@
+{
+  "default_candidates": [],
+  "family_process_names": {
+    "WannaCry": [
+      "ed01ebfbc9eb5b",
+      "wanadecryptor",
+      "taskhsvc",
+      "conhost.exe",
+      "vssvc.exe",
+      "vssvc"
+    ],
+    "Cerber": [
+      "cerber",
+      "mshta.exe",
+      "notepad.exe",
+      "cmd.exe"
+    ],
+    "Teslacrypt": [
+      "fjsauxu",
+      "prvudcr",
+      "vssvc.exe",
+      "vssadmin.exe",
+      "vssvc",
+      "vssadmin"
+    ],
+    "Vipasana": [
+      "0442cfabb32126",
+      "c0cf40b8830d66",
+      "e49778d20a2f9b",
+      "cmd.exe"
+    ],
+    "HiddenTear": [
+      "hidden-tear"
+    ]
+  }
+}

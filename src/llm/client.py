@@ -1,6 +1,8 @@
 import json
 import os
 import re
+from collections import Counter, defaultdict
+from statistics import mean
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 
@@ -159,7 +161,7 @@ class LLMClient:
             if self.max_output_tokens is not None:
                 req["max_tokens"] = self.max_output_tokens
 
-            if self.reasoning_enabled is not None:
+            if self.reasoning_enabled is True:
                 req["extra_body"] = {"reasoning": {"enabled": self.reasoning_enabled}}
 
             if self.force_json_response_format:
@@ -203,8 +205,98 @@ class LLMClient:
 
 
 def majority_vote(votes: List[dict]) -> dict:
-    # Placeholder strategy: pick the result with the largest suspicious set.
-    # This will be replaced by PID-level voting in the next iteration.
     if not votes:
-        return {"suspicious_processes": []}
-    return max(votes, key=lambda x: len(x.get("suspicious_processes", [])))
+        return {
+            "suspicious_processes": [],
+            "majority_vote_meta": {
+                "total_runs": 0,
+                "valid_runs": 0,
+                "threshold": 0,
+            },
+        }
+
+    valid_votes: List[Dict[str, Any]] = []
+    for vote in votes:
+        if not isinstance(vote, dict):
+            continue
+        if vote.get("api_error"):
+            continue
+        valid_votes.append(vote)
+
+    if not valid_votes:
+        return {
+            "suspicious_processes": [],
+            "majority_vote_meta": {
+                "total_runs": len(votes),
+                "valid_runs": 0,
+                "threshold": 0,
+            },
+        }
+
+    pid_support: Dict[int, int] = defaultdict(int)
+    pid_items: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+
+    for vote in valid_votes:
+        suspicious = vote.get("suspicious_processes", [])
+        if not isinstance(suspicious, list):
+            continue
+
+        seen_pids = set()
+        for item in suspicious:
+            if not isinstance(item, dict):
+                continue
+            pid_raw = item.get("pid")
+            if not isinstance(pid_raw, int):
+                continue
+            if pid_raw in seen_pids:
+                continue
+
+            seen_pids.add(pid_raw)
+            pid_support[pid_raw] += 1
+            pid_items[pid_raw].append(item)
+
+    threshold = (len(valid_votes) // 2) + 1
+
+    merged_items: List[Dict[str, Any]] = []
+    for pid, support in pid_support.items():
+        if support < threshold:
+            continue
+
+        candidates = pid_items.get(pid, [])
+        names = [str(x.get("process_name", "")).strip() for x in candidates if str(x.get("process_name", "")).strip()]
+        reasons = [str(x.get("reason", "")).strip() for x in candidates if str(x.get("reason", "")).strip()]
+
+        conf_values: List[float] = []
+        for x in candidates:
+            conf = x.get("confidence")
+            if conf is None:
+                continue
+            try:
+                conf_values.append(float(conf))
+            except (TypeError, ValueError):
+                continue
+
+        process_name = Counter(names).most_common(1)[0][0] if names else ""
+        reason = Counter(reasons).most_common(1)[0][0] if reasons else ""
+        confidence = round(mean(conf_values), 4) if conf_values else 0.0
+
+        merged_items.append(
+            {
+                "pid": pid,
+                "process_name": process_name,
+                "reason": reason,
+                "confidence": confidence,
+                "votes_for_pid": support,
+            }
+        )
+
+    merged_items.sort(key=lambda x: (-x.get("votes_for_pid", 0), -x.get("confidence", 0), x.get("pid", 0)))
+
+    return {
+        "suspicious_processes": merged_items,
+        "majority_vote_meta": {
+            "total_runs": len(votes),
+            "valid_runs": len(valid_votes),
+            "threshold": threshold,
+        },
+    }
