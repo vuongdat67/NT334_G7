@@ -174,6 +174,11 @@ def main() -> int:
         help="Optional provider override for this run (sets LLM_PROVIDER at runtime).",
     )
     parser.add_argument(
+        "--base-url",
+        default="",
+        help="Optional base URL override for this run (e.g. http://192.168.30.1:1234/v1).",
+    )
+    parser.add_argument(
         "--model",
         default="",
         help="Optional model override for this run (sets LLM_MODEL at runtime).",
@@ -204,6 +209,8 @@ def main() -> int:
     cfg = load_json(args.config)
     if args.model:
         cfg["llm_model"] = str(args.model)
+    if args.base_url:
+        cfg["llm_base_url"] = str(args.base_url)
 
     llm_provider = str(cfg.get("llm_provider", "")).strip() or "(not-set)"
     llm_model = cfg.get("llm_model", cfg.get("openai_model", ""))

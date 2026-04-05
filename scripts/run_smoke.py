@@ -1,4 +1,5 @@
 import argparse
+import math
 import json
 import os
 import sys
@@ -55,6 +56,31 @@ def _artifact_clean_flags(artifacts: Dict[str, Any]) -> Dict[str, bool]:
     return flags
 
 
+def _estimate_tokens(text: str, chars_per_token: float) -> int:
+    safe = max(1.0, float(chars_per_token))
+    return int(math.ceil(len(text) / safe))
+
+
+def _build_prompt_for_cfg(
+    cfg: Dict[str, Any],
+    prompt_template: str,
+    decision_rules: Dict[str, Any],
+    artifacts: Dict[str, Any],
+) -> str:
+    return build_prompt(
+        prompt_template,
+        decision_rules,
+        artifacts,
+        max_rows_per_plugin=cfg.get("artifact_max_rows_per_plugin"),
+        max_artifact_json_chars=int(cfg.get("artifact_max_json_chars", 3500)),
+        strategy=str(cfg.get("prompt_strategy", "chain_of_thought")),
+        ransomware_hint=str(cfg.get("ransomware_hint", "unknown")),
+        include_hallucination_check=bool(cfg.get("prompt_hallucination_check", True)),
+        recall_boost=bool(cfg.get("prompt_recall_boost", False)),
+        prompt_profile=str(cfg.get("prompt_profile", "legacy")),
+    )
+
+
 def main() -> int:
     load_dotenv()
 
@@ -76,6 +102,11 @@ def main() -> int:
         default="",
         choices=["", "openrouter", "gemini", "openai", "claude", "lmstudio", "ollama"],
         help="Optional provider override for this run (sets LLM_PROVIDER at runtime).",
+    )
+    parser.add_argument(
+        "--base-url",
+        default="",
+        help="Optional base URL override for this run (e.g. http://192.168.30.1:1234/v1).",
     )
     parser.add_argument(
         "--model",
@@ -126,12 +157,26 @@ def main() -> int:
         default=True,
         help="Use compact prompt settings (fewer rows, fewer output tokens, 1 voting run).",
     )
+    parser.add_argument(
+        "--max-estimated-input-tokens",
+        type=int,
+        default=3000,
+        help="Estimated input-token budget for one LLM call. If exceeded, auto-focus reduction is applied.",
+    )
+    parser.add_argument(
+        "--chars-per-token",
+        type=float,
+        default=4.0,
+        help="Heuristic chars/token used for token estimation.",
+    )
     args = parser.parse_args()
 
     if args.provider:
         os.environ["LLM_PROVIDER"] = args.provider
 
     cfg = load_json(args.config)
+    if args.base_url:
+        cfg["llm_base_url"] = str(args.base_url)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -218,6 +263,109 @@ def main() -> int:
         }
         run_cfg["prompt_strategy"] = "basic"
 
+    # Preflight estimate: if prompt looks too large, apply stronger focus settings.
+    preview_plugins = run_cfg.get("volatility_plugins") or [
+        "windows.pslist",
+        "windows.vadinfo",
+        "windows.malfind",
+    ]
+    preview_artifacts = volatility.collect(
+        dump_path,
+        preview_plugins,
+        parallel=bool(run_cfg.get("volatility_parallel_plugins", False)),
+        max_workers=int(run_cfg.get("volatility_max_workers", 2)),
+    )
+    prompt_template = Path(cfg["prompt_template_path"]).read_text(encoding="utf-8")
+    decision_rules = _read_json(cfg["decision_rules_path"])
+
+    preview_prompt_before = _build_prompt_for_cfg(
+        run_cfg,
+        prompt_template,
+        decision_rules,
+        preview_artifacts,
+    )
+    est_before = _estimate_tokens(preview_prompt_before, args.chars_per_token)
+    budget = max(1, int(args.max_estimated_input_tokens))
+    budget_exceeded = est_before > budget
+    auto_focus_applied = False
+    auto_focus_rounds = 0
+
+    if budget_exceeded:
+        auto_focus_applied = True
+        run_cfg["majority_runs"] = 1
+        run_cfg["llm_max_output_tokens"] = min(
+            int(run_cfg.get("llm_max_output_tokens", 160)),
+            160,
+        )
+        run_cfg["artifact_max_json_chars"] = min(
+            int(run_cfg.get("artifact_max_json_chars", 1200)),
+            1200,
+        )
+        run_cfg["artifact_max_rows_per_plugin"] = {
+            "default": 12,
+            "windows.pslist": 12,
+            "windows.vadinfo": 4,
+            "windows.malfind": 4,
+        }
+        run_cfg["prompt_strategy"] = "basic"
+
+    preview_prompt_after = _build_prompt_for_cfg(
+        run_cfg,
+        prompt_template,
+        decision_rules,
+        preview_artifacts,
+    )
+    est_after = _estimate_tokens(preview_prompt_after, args.chars_per_token)
+
+    # If still above budget, keep tightening payload in bounded rounds.
+    while est_after > budget and auto_focus_rounds < 4:
+        auto_focus_rounds += 1
+        auto_focus_applied = True
+
+        current_chars = int(run_cfg.get("artifact_max_json_chars", 1200))
+        run_cfg["artifact_max_json_chars"] = max(500, int(current_chars * 0.75))
+
+        if auto_focus_rounds == 1:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 10,
+                "windows.pslist": 10,
+                "windows.vadinfo": 3,
+                "windows.malfind": 3,
+            }
+            run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 140)), 140)
+        elif auto_focus_rounds == 2:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 8,
+                "windows.pslist": 8,
+                "windows.vadinfo": 2,
+                "windows.malfind": 2,
+            }
+            run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 120)), 120)
+        elif auto_focus_rounds == 3:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 6,
+                "windows.pslist": 6,
+                "windows.vadinfo": 2,
+                "windows.malfind": 2,
+            }
+            run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 96)), 96)
+        else:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 5,
+                "windows.pslist": 5,
+                "windows.vadinfo": 1,
+                "windows.malfind": 1,
+            }
+            run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 80)), 80)
+
+        preview_prompt_after = _build_prompt_for_cfg(
+            run_cfg,
+            prompt_template,
+            decision_rules,
+            preview_artifacts,
+        )
+        est_after = _estimate_tokens(preview_prompt_after, args.chars_per_token)
+
     run_cfg["memory_dump_path"] = dump_path
     run_cfg["output_report_path"] = str(out_dir / f"{snapshot_stem}.report.json")
     run_cfg["output_votes_path"] = str(out_dir / f"{snapshot_stem}.votes.json")
@@ -225,23 +373,27 @@ def main() -> int:
 
     report = run_pipeline_config(run_cfg)
 
+    votes_data = _read_json(run_cfg["output_votes_path"])
+    usage_prompt_tokens = 0
+    usage_completion_tokens = 0
+    usage_total_tokens = 0
+    usage_records = 0
+    if isinstance(votes_data, list):
+        for vote in votes_data:
+            if not isinstance(vote, dict):
+                continue
+            usage = vote.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            usage_prompt_tokens += int(usage.get("prompt_tokens", 0) or 0)
+            usage_completion_tokens += int(usage.get("completion_tokens", 0) or 0)
+            usage_total_tokens += int(usage.get("total_tokens", 0) or 0)
+            usage_records += 1
+
     artifacts = _read_json(run_cfg["output_artifacts_path"])
     clean_flags = _artifact_clean_flags(artifacts)
 
-    prompt_template = Path(cfg["prompt_template_path"]).read_text(encoding="utf-8")
-    decision_rules = _read_json(cfg["decision_rules_path"])
-    prompt = build_prompt(
-        prompt_template,
-        decision_rules,
-        artifacts,
-        max_rows_per_plugin=run_cfg.get("artifact_max_rows_per_plugin"),
-        max_artifact_json_chars=int(run_cfg.get("artifact_max_json_chars", 3500)),
-        strategy=str(run_cfg.get("prompt_strategy", "chain_of_thought")),
-        ransomware_hint=str(run_cfg.get("ransomware_hint", "unknown")),
-        include_hallucination_check=bool(run_cfg.get("prompt_hallucination_check", True)),
-        recall_boost=bool(run_cfg.get("prompt_recall_boost", False)),
-        prompt_profile=str(run_cfg.get("prompt_profile", "legacy")),
-    )
+    prompt = _build_prompt_for_cfg(run_cfg, prompt_template, decision_rules, artifacts)
 
     eval_metrics = evaluate(run_cfg["output_report_path"], str(label_path))
     summary = {
@@ -254,6 +406,22 @@ def main() -> int:
         "effective_majority_runs": int(run_cfg.get("majority_runs", 0)),
         "effective_llm_max_output_tokens": int(run_cfg.get("llm_max_output_tokens", 0)),
         "effective_artifact_max_json_chars": int(run_cfg.get("artifact_max_json_chars", 0)),
+        "token_budget": {
+            "chars_per_token": float(args.chars_per_token),
+            "max_estimated_input_tokens": int(args.max_estimated_input_tokens),
+            "estimated_input_tokens_before": int(est_before),
+            "estimated_input_tokens_after": int(est_after),
+            "budget_exceeded_before": bool(budget_exceeded),
+            "auto_focus_applied": bool(auto_focus_applied),
+            "auto_focus_rounds": int(auto_focus_rounds),
+            "budget_met_after": bool(est_after <= budget),
+        },
+        "llm_usage": {
+            "usage_records": int(usage_records),
+            "prompt_tokens": int(usage_prompt_tokens),
+            "completion_tokens": int(usage_completion_tokens),
+            "total_tokens": int(usage_total_tokens),
+        },
         "manifest_used": str(manifest_json),
         "smoke_manifest": str(smoke_manifest),
         "label_path": str(label_path),

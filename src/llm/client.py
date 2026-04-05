@@ -11,6 +11,24 @@ from openai import OpenAI
 
 class LLMClient:
     @staticmethod
+    def _sanitize_suspicious_items(payload: Dict[str, Any]) -> Dict[str, Any]:
+        items = payload.get("suspicious_processes", [])
+        if not isinstance(items, list):
+            payload["suspicious_processes"] = []
+            return payload
+
+        clean = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            pid = item.get("pid")
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+            clean.append(item)
+        payload["suspicious_processes"] = clean
+        return payload
+
+    @staticmethod
     def _is_local_base_url(base_url: Optional[str]) -> bool:
         if not base_url:
             return False
@@ -88,7 +106,12 @@ class LLMClient:
                 "max_tokens": 220,
                 "response_format": {"type": "json_object"},
             }
-            resp = self.client.chat.completions.create(**req)
+            try:
+                resp = self.client.chat.completions.create(**req)
+            except Exception:
+                # Some local OpenAI-compatible servers do not support response_format.
+                req.pop("response_format", None)
+                resp = self.client.chat.completions.create(**req)
             text = (resp.choices[0].message.content or "").strip()
             return self._extract_json(text)
         except Exception:
@@ -189,13 +212,20 @@ class LLMClient:
         parsed = self._extract_json(text)
         if parsed is not None:
             parsed.setdefault("suspicious_processes", [])
-            return parsed
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                parsed["usage"] = {
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                }
+            return self._sanitize_suspicious_items(parsed)
 
         repaired = self._repair_to_json(text)
         if repaired is not None:
             repaired.setdefault("suspicious_processes", [])
             repaired["repaired_json"] = True
-            return repaired
+            return self._sanitize_suspicious_items(repaired)
 
         return {
             "suspicious_processes": [],
