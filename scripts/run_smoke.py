@@ -378,10 +378,19 @@ def main() -> int:
     usage_completion_tokens = 0
     usage_total_tokens = 0
     usage_records = 0
+    vote_api_error_count = 0
+    vote_parse_error_count = 0
+    vote_repaired_count = 0
     if isinstance(votes_data, list):
         for vote in votes_data:
             if not isinstance(vote, dict):
                 continue
+            if vote.get("api_error"):
+                vote_api_error_count += 1
+            if vote.get("parse_error"):
+                vote_parse_error_count += 1
+            if vote.get("repaired_json"):
+                vote_repaired_count += 1
             usage = vote.get("usage")
             if not isinstance(usage, dict):
                 continue
@@ -421,6 +430,11 @@ def main() -> int:
             "prompt_tokens": int(usage_prompt_tokens),
             "completion_tokens": int(usage_completion_tokens),
             "total_tokens": int(usage_total_tokens),
+        },
+        "vote_quality": {
+            "api_error_count": int(vote_api_error_count),
+            "parse_error_count": int(vote_parse_error_count),
+            "repaired_json_count": int(vote_repaired_count),
         },
         "manifest_used": str(manifest_json),
         "smoke_manifest": str(smoke_manifest),

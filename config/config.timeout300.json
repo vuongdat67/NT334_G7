@@ -1,0 +1,42 @@
+{
+  "volatility_script_path": "~/tools/volatility3/vol.py",
+  "memory_dump_path": "",
+  "volatility_plugins": [
+    "windows.pslist",
+    "windows.vadinfo",
+    "windows.malfind"
+  ],
+  "volatility_plugin_timeout_seconds": 240,
+  "volatility_parallel_plugins": false,
+  "volatility_max_workers": 2,
+  "prompt_template_path": "config/prompt_template_v1.txt",
+  "decision_rules_path": "config/decision_rules.json",
+  "prompt_strategy": "chain_of_thought",
+  "prompt_profile": "legacy",
+  "ransomware_hint": "unknown",
+  "prompt_hallucination_check": true,
+  "prompt_recall_boost": false,
+  "llm_provider": "",
+  "provider_profiles_path": "config/provider_profiles.json",
+  "llm_model": "",
+  "llm_api_key_env": "",
+  "llm_base_url": "",
+  "llm_timeout_seconds": 300,
+  "llm_max_output_tokens": 700,
+  "llm_force_json_response_format": true,
+  "llm_reasoning_enabled": false,
+  "artifact_max_rows_per_plugin": {
+    "default": 40,
+    "windows.pslist": 40,
+    "windows.vadinfo": 20,
+    "windows.malfind": 15
+  },
+  "artifact_max_json_chars": 3500,
+  "post_filter_enabled": true,
+  "post_filter_min_conf_keep_for_allowlisted": 0.92,
+  "temperature": 0,
+  "majority_runs": 3,
+  "output_artifacts_path": "results/artifacts.json",
+  "output_report_path": "results/triage_report.json",
+  "output_votes_path": "results/triage_votes.json"
+}
