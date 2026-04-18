@@ -70,6 +70,8 @@ cp .env.gemini.example .env
 cp .env.openrouter.example .env
 # or
 cp .env.claude.example .env
+# or
+cp .env.nvidia.example .env
 ```
 
 You can also start from the generic template:
@@ -82,6 +84,7 @@ Set variables based on your provider:
 
 - Local model (LM Studio/Ollama): `LOCAL_LLM_API_KEY=local-not-needed`
 - Gemini AI Studio: `GEMINI_API_KEY=...`
+- NVIDIA Integrate API (OpenAI-compatible): `NVIDIA_API_KEY=...`
 - OpenRouter fallback: `OPENROUTER_API_KEY=...`
 - OpenAI cloud (optional): `OPENAI_API_KEY=...`
 
@@ -89,7 +92,7 @@ You can also set run defaults in `.env` (model, dump path, experiment name, resu
 
 Recommended selector variables:
 
-- `LLM_PROVIDER` (`gemini` | `openrouter` | `openai` | `lmstudio` | `ollama`)
+- `LLM_PROVIDER` (`gemini` | `nvidia` | `openrouter` | `openai` | `lmstudio` | `ollama`)
 - `PROVIDER_PROFILES_PATH=config/provider_profiles.json`
 
 Important: if you set multiple cloud keys in `.env` (for example both `OPENROUTER_API_KEY` and `GEMINI_API_KEY`), set `LLM_PROVIDER` explicitly.
@@ -137,6 +140,10 @@ Profile-first switching (cleanest):
   - `LLM_PROVIDER=openrouter`
   - `OPENROUTER_API_KEY=...`
   - `OPENROUTER_MODEL=qwen/qwen3.6-plus:free`
+- NVIDIA:
+  - `LLM_PROVIDER=nvidia`
+  - `NVIDIA_API_KEY=...`
+  - `NVIDIA_MODEL=minimaxai/minimax-m2.7`
 - OpenAI:
   - `LLM_PROVIDER=openai`
   - `OPENAI_API_KEY=...`
@@ -185,6 +192,7 @@ Available subcommands include:
 - `report-model`
 - `report-final`
 - `evaluate`
+- `evaluate-extended`
 
 ### 4.4.1 Quick test command (pytest)
 
@@ -537,3 +545,48 @@ Why this range: process triage needs instruction following + structured JSON out
 - Current phase: Phase C (baseline reproduction) with cross-model experiment automation completed.
 - In progress: Phase D (metrics and family-level analysis), especially false-positive comparison on selected stable free models.
 - Blocker to watch: if `LLM_API_KEY_ENV` is empty in `.env`, all model runs will fail and produce meaningless comparison rows.
+
+## 9) Final Freeze and Lecturer Reproduce Path
+
+Final selected model for current project freeze:
+
+- `abacusai/dracarys-llama-3.1-70b-instruct` (NVIDIA free endpoint)
+
+Reason (short): best ransomware smoke recall/F1 among tested free NVIDIA candidates with acceptable output stability.
+
+### 9.1 Standard reproduce commands (minimal)
+
+```bash
+cd /mnt/c/Users/vuong/Documents/volGPT/volGPT
+source .venv/bin/activate
+
+# 1) Preflight model availability
+python scripts/health_check.py --provider nvidia --model abacusai/dracarys-llama-3.1-70b-instruct --skip-ping --strict
+
+# 2) Build manifest (if missing)
+python scripts/build_snapshot_manifest.py --data-dir data --out-json results/nvidia_matrix_20260417/manifest.json --out-csv results/nvidia_matrix_20260417/manifest.csv
+
+# 3) One ransomware smoke run
+python scripts/run_smoke.py \
+  --config config/config.json \
+  --provider nvidia \
+  --model abacusai/dracarys-llama-3.1-70b-instruct \
+  --ground-truth-config config/ground_truth_process_names.json \
+  --manifest results/nvidia_matrix_20260417/manifest.json \
+  --no-rebuild-manifest \
+  --category ransomware \
+  --snapshot-index 0 \
+  --max-estimated-input-tokens 1500 \
+  --out-dir results/nvidia_matrix_20260417/dracarys_llama_3_1_70b
+
+# 4) Extended evaluation JSON
+python scripts/evaluate_extended.py \
+  --results-dir results/nvidia_matrix_20260417/dracarys_llama_3_1_70b \
+  --out-json results/nvidia_matrix_20260417/dracarys_llama_3_1_70b/evaluate_extended.json
+```
+
+Expected artifacts:
+
+- `results/nvidia_matrix_20260417/dracarys_llama_3_1_70b/smoke_summary.json`
+- `results/nvidia_matrix_20260417/dracarys_llama_3_1_70b/Snapshot_malicious_301.report.json`
+- `results/nvidia_matrix_20260417/dracarys_llama_3_1_70b/evaluate_extended.json`

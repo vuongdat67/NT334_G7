@@ -73,15 +73,74 @@ DEFAULT_FEW_SHOT = {
 
 
 def _truncate_artifacts_rows(
-    artifacts: dict, max_rows_per_plugin: dict[str, int]
+    artifacts: dict,
+    max_rows_per_plugin: dict[str, int],
+    priority_process_names: list[str] | None = None,
 ) -> dict:
     truncated = deepcopy(artifacts)
+    normalized_priority = {
+        str(name).strip().lower()
+        for name in (priority_process_names or [])
+        if str(name).strip()
+    }
+
+    def row_process_name(row: dict) -> str:
+        for key in ("process_name", "name", "ImageFileName", "Process"):
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value).strip().lower()
+        return ""
+
+    def select_rows(plugin: str, rows: list, max_rows: int) -> list:
+        if len(rows) <= max_rows:
+            return rows
+
+        selected = []
+        seen = set()
+
+        def add_row(item):
+            try:
+                key = json.dumps(item, ensure_ascii=True, sort_keys=True)
+            except TypeError:
+                key = str(item)
+            if key in seen:
+                return
+            seen.add(key)
+            selected.append(item)
+
+        # For pslist, keep family-relevant process names first.
+        if plugin == "windows.pslist" and normalized_priority:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if row_process_name(row) in normalized_priority:
+                    add_row(row)
+                    if len(selected) >= max_rows:
+                        return selected
+
+        head = max(1, max_rows // 2)
+        tail = max_rows - head
+        for row in rows[:head]:
+            add_row(row)
+            if len(selected) >= max_rows:
+                return selected
+        for row in rows[-tail:]:
+            add_row(row)
+            if len(selected) >= max_rows:
+                return selected
+
+        for row in rows:
+            add_row(row)
+            if len(selected) >= max_rows:
+                return selected
+        return selected
+
     for plugin, data in truncated.items():
         if isinstance(data, list):
             max_rows = int(max_rows_per_plugin.get(plugin, max_rows_per_plugin.get("default", 80)))
             if len(data) > max_rows:
                 truncated[plugin] = {
-                    "rows": data[:max_rows],
+                    "rows": select_rows(plugin, data, max_rows),
                     "_rows_total": len(data),
                     "_rows_truncated": len(data) - max_rows,
                 }
@@ -95,7 +154,7 @@ def _truncate_artifacts_rows(
         if isinstance(rows, list):
             max_rows = int(max_rows_per_plugin.get(plugin, max_rows_per_plugin.get("default", 80)))
             if len(rows) > max_rows:
-                data["rows"] = rows[:max_rows]
+                data["rows"] = select_rows(plugin, rows, max_rows)
                 data["_rows_total"] = len(rows)
                 data["_rows_truncated"] = len(rows) - max_rows
     return truncated
@@ -103,12 +162,21 @@ def _truncate_artifacts_rows(
 
 def _enforce_max_chars(artifacts: dict, max_chars: int) -> dict:
     working = deepcopy(artifacts)
+
+    def balanced_head_tail(rows: list, new_len: int) -> list:
+        if len(rows) <= new_len:
+            return rows
+        head = max(1, new_len // 2)
+        tail = new_len - head
+        selected = rows[:head] + rows[-tail:]
+        return selected[:new_len]
+
     while len(json.dumps(working, ensure_ascii=True)) > max_chars:
         changed = False
         for plugin, data in working.items():
             if isinstance(data, list) and len(data) > 10:
                 new_len = max(10, len(data) // 2)
-                working[plugin] = data[:new_len]
+                working[plugin] = balanced_head_tail(data, new_len)
                 changed = True
                 continue
 
@@ -117,7 +185,7 @@ def _enforce_max_chars(artifacts: dict, max_chars: int) -> dict:
             rows = data.get("rows")
             if isinstance(rows, list) and len(rows) > 10:
                 new_len = max(10, len(rows) // 2)
-                data["rows"] = rows[:new_len]
+                data["rows"] = balanced_head_tail(rows, new_len)
                 data["_rows_compacted_to"] = new_len
                 changed = True
         if not changed:
@@ -190,7 +258,17 @@ def build_prompt(
             "windows.malfind": 40,
         }
 
-    compact_artifacts = _truncate_artifacts_rows(artifacts, max_rows_per_plugin)
+    priority_process_names = []
+    if isinstance(decision_rules, dict):
+        family_names = decision_rules.get("family_candidate_process_names")
+        if isinstance(family_names, list):
+            priority_process_names = [str(name) for name in family_names]
+
+    compact_artifacts = _truncate_artifacts_rows(
+        artifacts,
+        max_rows_per_plugin,
+        priority_process_names=priority_process_names,
+    )
     compact_artifacts = _compact_row_fields(compact_artifacts)
     compact_artifacts = _enforce_max_chars(compact_artifacts, max_artifact_json_chars)
 
@@ -248,7 +326,9 @@ def _build_strategy_block(strategy: str, ransomware_hint: str) -> str:
             "\n2) If parent process is suspicious, investigate direct children aggressively."
             "\n3) Treat RWX VAD or malfind signals as strong escalation factors."
             "\n4) When uncertain but evidence exists, keep process with medium confidence."
-            "\n5) Return final JSON only."
+            "\n5) If decision_rules.family_candidate_process_names is present and a pslist name matches,"
+            " include that PID as suspicious unless strong benign evidence contradicts it."
+            "\n6) Return final JSON only."
         )
 
     # Default: chain-of-thought style checklist without exposing internal reasoning text.

@@ -21,6 +21,7 @@ SCRIPT_REGISTRY = {
     "report-final": ("scripts/export_final_comparison_table.py", "Export final LLM vs Rule vs XGBoost table"),
     "report-model": ("scripts/export_model_comparison_markdown.py", "Export model-comparison markdown report"),
     "evaluate": ("scripts/evaluate.py", "Evaluate one prediction report against one labels file"),
+    "evaluate-extended": ("scripts/evaluate_extended.py", "Extended evaluation with family metrics, consistency, explanation rubric, and optional McNemar"),
 }
 
 

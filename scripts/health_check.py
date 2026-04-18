@@ -170,7 +170,7 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         default="",
-        choices=["", "openrouter", "gemini", "openai", "claude", "lmstudio", "ollama"],
+        choices=["", "openrouter", "gemini", "nvidia", "openai", "claude", "lmstudio", "ollama"],
         help="Optional provider override for this run (sets LLM_PROVIDER at runtime).",
     )
     parser.add_argument(

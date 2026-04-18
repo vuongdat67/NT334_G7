@@ -2,10 +2,34 @@ import json
 from pathlib import Path
 
 from src.config.loader import load_json
+from src.forensics.psscan_diff import detect_hidden_pids
 from src.forensics.post_filter import apply_conservative_post_filter
 from src.forensics.volatility import VolatilityRunner
 from src.llm.client import LLMClient, majority_vote
 from src.prompts.builder import build_prompt
+
+
+def attach_hidden_process_diff(artifacts: dict) -> dict:
+    if not isinstance(artifacts, dict):
+        return artifacts
+    if "windows.psscan" not in artifacts:
+        return artifacts
+
+    diff = detect_hidden_pids(
+        artifacts.get("windows.pslist"),
+        artifacts.get("windows.psscan"),
+    )
+    if not isinstance(diff, dict):
+        return artifacts
+
+    hidden_rows = diff.get("hidden_rows")
+    if isinstance(hidden_rows, list) and len(hidden_rows) > 20:
+        diff = dict(diff)
+        diff["hidden_rows"] = hidden_rows[:20]
+        diff["hidden_rows_truncated"] = len(hidden_rows) - 20
+
+    artifacts["windows.hidden_process_diff"] = diff
+    return artifacts
 
 
 def run_pipeline_config(cfg: dict) -> dict:
@@ -29,6 +53,7 @@ def run_pipeline_config(cfg: dict) -> dict:
         parallel=bool(cfg.get("volatility_parallel_plugins", False)),
         max_workers=int(cfg.get("volatility_max_workers", 2)),
     )
+    artifacts = attach_hidden_process_diff(artifacts)
 
     artifact_max_rows_per_plugin = cfg.get("artifact_max_rows_per_plugin")
     artifact_max_json_chars = int(cfg.get("artifact_max_json_chars", 24000))

@@ -6,6 +6,7 @@
     "windows.vadinfo",
     "windows.malfind"
   ],
+  "_volatility_plugins_optional_note": "Add 'windows.psscan' to enable hidden-process detection (pslist vs psscan diff). Add 'windows.cmdline' for process command-line args. These increase runtime but surface additional signals.",
   "volatility_plugin_timeout_seconds": 240,
   "volatility_parallel_plugins": false,
   "volatility_max_workers": 2,

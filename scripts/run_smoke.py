@@ -19,7 +19,7 @@ from src.data.manifest import build_manifest, write_manifest_csv, write_manifest
 from src.evaluation.metrics import evaluate
 from src.forensics.volatility import VolatilityRunner
 from src.labels.intersection import build_label_from_intersection, write_label_file
-from src.pipeline.runner import run_pipeline_config
+from src.pipeline.runner import attach_hidden_process_diff, run_pipeline_config
 from src.prompts.builder import build_prompt
 
 
@@ -100,7 +100,7 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         default="",
-        choices=["", "openrouter", "gemini", "openai", "claude", "lmstudio", "ollama"],
+        choices=["", "openrouter", "gemini", "nvidia", "openai", "claude", "lmstudio", "ollama"],
         help="Optional provider override for this run (sets LLM_PROVIDER at runtime).",
     )
     parser.add_argument(
@@ -223,6 +223,8 @@ def main() -> int:
     snapshot_stem = Path(file_name).stem
     dump_path = str(selected.get("file_path", ""))
     family = str(selected.get("executable", "Unknown"))
+    selected_category = str(selected.get("category", "unknown")).strip().lower()
+    is_ransomware_case = selected_category == "ransomware" or args.category == "ransomware"
 
     gt_cfg = _read_json(args.ground_truth_config)
     family_to_processes = gt_cfg.get("family_process_names", {})
@@ -245,6 +247,11 @@ def main() -> int:
     if args.model:
         run_cfg["llm_model"] = str(args.model)
 
+    if is_ransomware_case:
+        run_cfg["ransomware_hint"] = family.lower()
+        run_cfg["prompt_recall_boost"] = True
+        run_cfg["prompt_strategy"] = "high_recall"
+
     if args.low_token_mode:
         run_cfg["majority_runs"] = 1
         run_cfg["llm_max_output_tokens"] = min(
@@ -255,13 +262,23 @@ def main() -> int:
             int(run_cfg.get("artifact_max_json_chars", 1800)),
             1800,
         )
-        run_cfg["artifact_max_rows_per_plugin"] = {
-            "default": 20,
-            "windows.pslist": 20,
-            "windows.vadinfo": 8,
-            "windows.malfind": 8,
-        }
-        run_cfg["prompt_strategy"] = "basic"
+        if is_ransomware_case:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 20,
+                "windows.pslist": 35,
+                "windows.vadinfo": 4,
+                "windows.malfind": 4,
+            }
+            run_cfg["prompt_strategy"] = "high_recall"
+            run_cfg["prompt_recall_boost"] = True
+        else:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 20,
+                "windows.pslist": 20,
+                "windows.vadinfo": 8,
+                "windows.malfind": 8,
+            }
+            run_cfg["prompt_strategy"] = "basic"
 
     # Preflight estimate: if prompt looks too large, apply stronger focus settings.
     preview_plugins = run_cfg.get("volatility_plugins") or [
@@ -275,8 +292,22 @@ def main() -> int:
         parallel=bool(run_cfg.get("volatility_parallel_plugins", False)),
         max_workers=int(run_cfg.get("volatility_max_workers", 2)),
     )
+    preview_artifacts = attach_hidden_process_diff(preview_artifacts)
     prompt_template = Path(cfg["prompt_template_path"]).read_text(encoding="utf-8")
     decision_rules = _read_json(cfg["decision_rules_path"])
+
+    if is_ransomware_case:
+        decision_rules = deepcopy(decision_rules)
+        decision_rules["family_hint"] = family
+        decision_rules["family_candidate_process_names"] = list(candidates)
+        existing_focus = decision_rules.get("ransomware_focus")
+        if not isinstance(existing_focus, list):
+            existing_focus = []
+        decision_rules["ransomware_focus"] = existing_focus + [
+            "Prioritize process names and direct children matching family_candidate_process_names.",
+            "For windows.pslist, treat late-session user processes as equally important as early boot processes.",
+            "When evidence exists, prefer returning candidate processes with medium confidence over empty output.",
+        ]
 
     preview_prompt_before = _build_prompt_for_cfg(
         run_cfg,
@@ -301,13 +332,23 @@ def main() -> int:
             int(run_cfg.get("artifact_max_json_chars", 1200)),
             1200,
         )
-        run_cfg["artifact_max_rows_per_plugin"] = {
-            "default": 12,
-            "windows.pslist": 12,
-            "windows.vadinfo": 4,
-            "windows.malfind": 4,
-        }
-        run_cfg["prompt_strategy"] = "basic"
+        if is_ransomware_case:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 12,
+                "windows.pslist": 20,
+                "windows.vadinfo": 2,
+                "windows.malfind": 2,
+            }
+            run_cfg["prompt_strategy"] = "high_recall"
+            run_cfg["prompt_recall_boost"] = True
+        else:
+            run_cfg["artifact_max_rows_per_plugin"] = {
+                "default": 12,
+                "windows.pslist": 12,
+                "windows.vadinfo": 4,
+                "windows.malfind": 4,
+            }
+            run_cfg["prompt_strategy"] = "basic"
 
     preview_prompt_after = _build_prompt_for_cfg(
         run_cfg,
@@ -326,36 +367,68 @@ def main() -> int:
         run_cfg["artifact_max_json_chars"] = max(500, int(current_chars * 0.75))
 
         if auto_focus_rounds == 1:
-            run_cfg["artifact_max_rows_per_plugin"] = {
-                "default": 10,
-                "windows.pslist": 10,
-                "windows.vadinfo": 3,
-                "windows.malfind": 3,
-            }
+            if is_ransomware_case:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 10,
+                    "windows.pslist": 16,
+                    "windows.vadinfo": 2,
+                    "windows.malfind": 2,
+                }
+            else:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 10,
+                    "windows.pslist": 10,
+                    "windows.vadinfo": 3,
+                    "windows.malfind": 3,
+                }
             run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 140)), 140)
         elif auto_focus_rounds == 2:
-            run_cfg["artifact_max_rows_per_plugin"] = {
-                "default": 8,
-                "windows.pslist": 8,
-                "windows.vadinfo": 2,
-                "windows.malfind": 2,
-            }
+            if is_ransomware_case:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 8,
+                    "windows.pslist": 14,
+                    "windows.vadinfo": 2,
+                    "windows.malfind": 2,
+                }
+            else:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 8,
+                    "windows.pslist": 8,
+                    "windows.vadinfo": 2,
+                    "windows.malfind": 2,
+                }
             run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 120)), 120)
         elif auto_focus_rounds == 3:
-            run_cfg["artifact_max_rows_per_plugin"] = {
-                "default": 6,
-                "windows.pslist": 6,
-                "windows.vadinfo": 2,
-                "windows.malfind": 2,
-            }
+            if is_ransomware_case:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 6,
+                    "windows.pslist": 12,
+                    "windows.vadinfo": 2,
+                    "windows.malfind": 2,
+                }
+            else:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 6,
+                    "windows.pslist": 6,
+                    "windows.vadinfo": 2,
+                    "windows.malfind": 2,
+                }
             run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 96)), 96)
         else:
-            run_cfg["artifact_max_rows_per_plugin"] = {
-                "default": 5,
-                "windows.pslist": 5,
-                "windows.vadinfo": 1,
-                "windows.malfind": 1,
-            }
+            if is_ransomware_case:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 5,
+                    "windows.pslist": 10,
+                    "windows.vadinfo": 1,
+                    "windows.malfind": 1,
+                }
+            else:
+                run_cfg["artifact_max_rows_per_plugin"] = {
+                    "default": 5,
+                    "windows.pslist": 5,
+                    "windows.vadinfo": 1,
+                    "windows.malfind": 1,
+                }
             run_cfg["llm_max_output_tokens"] = min(int(run_cfg.get("llm_max_output_tokens", 80)), 80)
 
         preview_prompt_after = _build_prompt_for_cfg(

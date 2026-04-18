@@ -27,6 +27,8 @@ def _detect_provider_candidates_from_env() -> list[str]:
         candidates.append("openrouter")
     if _env_text("GEMINI_API_KEY"):
         candidates.append("gemini")
+    if _env_text("NVIDIA_API_KEY"):
+        candidates.append("nvidia")
     if _env_text("OPENAI_API_KEY"):
         candidates.append("openai")
     return candidates

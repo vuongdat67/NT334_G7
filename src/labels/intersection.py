@@ -10,7 +10,11 @@ def _normalize_name(name: str) -> str:
 
 def _trim_windows_image_name(name: str) -> str:
     n = _normalize_name(name)
-    # EPROCESS ImageFileName is often 14-15 chars depending on parser.
+    # The Windows EPROCESS ImageFileName field is CHAR[15] (null-terminated),
+    # giving 14 visible characters per the paper (Sec 5.1.2). Volatility 3
+    # surfaces the full 15-byte field without the null, so we trim to 15 here
+    # to match Volatility 3 output faithfully. If a future parser exposes only
+    # 14 chars, change this constant to 14.
     return n[:15]
 
 
