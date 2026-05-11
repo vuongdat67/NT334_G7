@@ -1,5 +1,6 @@
 import json
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -68,24 +69,32 @@ class VolatilityRunner:
             "json",
             plugin,
         ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.plugin_timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as e:
+        
+        max_retries = 2
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.plugin_timeout_seconds,
+                )
+                if proc.returncode == 0:
+                    break
+                last_error = f"Return code {proc.returncode}. STDERR: {proc.stderr.strip()}"
+            except subprocess.TimeoutExpired as e:
+                last_error = f"Timeout after {self.plugin_timeout_seconds}s"
+            except Exception as e:
+                last_error = str(e)
+            
+            if attempt < max_retries:
+                time.sleep(2 * (attempt + 1))
+        else:
             raise RuntimeError(
-                "Volatility plugin timed out: "
-                f"{plugin} after {self.plugin_timeout_seconds} seconds. "
-                "Increase volatility_plugin_timeout_seconds in config if needed."
-            ) from e
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "Volatility plugin failed: "
-                f"{plugin}\nCommand: {' '.join(cmd)}\nSTDERR: {proc.stderr.strip()}"
+                f"Volatility plugin failed after {max_retries + 1} attempts: "
+                f"{plugin}\nCommand: {' '.join(cmd)}\nError: {last_error}"
             )
 
         stdout = proc.stdout.strip()

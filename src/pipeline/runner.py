@@ -128,6 +128,16 @@ def run_pipeline_config(cfg: dict) -> dict:
     votes_path.write_text(
         json.dumps(votes, ensure_ascii=True, indent=2), encoding="utf-8"
     )
+    
+    # Save a separate raw output file to satisfy user request
+    raw_responses = []
+    for v in votes:
+        if isinstance(v, dict) and "raw_response" in v:
+            raw_responses.append(v["raw_response"])
+    
+    raw_path = votes_path.parent / "raw_responses.json"
+    raw_path.write_text(json.dumps(raw_responses, ensure_ascii=False, indent=2), encoding="utf-8")
+    
     report_path = Path(cfg["output_report_path"])
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(

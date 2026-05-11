@@ -63,13 +63,16 @@ if __name__ == "__main__":
         prog="run_rule_baseline.py",
         description="Run deterministic rule baseline and export snapshot/family metrics.",
         examples=[
-            "python scripts/run_rule_baseline.py --config config/config.json --manifest results/snapshot_manifest.json --labels-dir results/labels",
+            "python scripts/run_rule_baseline.py --config config/config.json --manifest results/snapshot_manifest.json",
         ],
     )
     parser.add_argument("--config", default="config/config.json")
     parser.add_argument("--manifest", default="results/snapshot_manifest.json")
-    parser.add_argument("--labels-dir", default="results/labels")
-    parser.add_argument("--ground-truth-config", default="config/ground_truth_process_names.json")
+    parser.add_argument(
+        "--gt-cfg",
+        default="config/ground_truth_process_names.json",
+        help="Path to ground truth process names JSON",
+    )
     parser.add_argument("--category", default="all", choices=["all", "benign", "ransomware", "benign-tool", "unknown"])
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--out-dir", default="results/baseline_rule")
@@ -102,10 +105,6 @@ if __name__ == "__main__":
         snapshot_stem = Path(snapshot).stem
         dump_path = str(row.get("file_path"))
         family = str(row.get("executable", "Unknown"))
-        label_path = Path(args.labels_dir) / f"{snapshot_stem}.labels.json"
-
-        if not label_path.exists():
-            continue
 
         try:
             artifacts = vol.collect(dump_path, ["windows.pslist", "windows.vadinfo", "windows.malfind"])
@@ -113,10 +112,29 @@ if __name__ == "__main__":
             report_path = out_dir / f"{snapshot_stem}.report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
 
-            labels = _read_json(str(label_path))
             pred = {x.get("pid") for x in report.get("suspicious_processes", []) if isinstance(x.get("pid"), int)}
-            all_pids = set(int(x) for x in labels.get("all_pids", []) if isinstance(x, int))
-            malicious = set(int(x) for x in labels.get("malicious_pids", []) if isinstance(x, int))
+            
+            # Dynamically calculate ground truth from artifacts and config
+            all_pids = set()
+            malicious = set()
+            
+            pslist_data = artifacts.get("windows.pslist", {})
+            pslist_rows = pslist_data.get("rows", []) if isinstance(pslist_data, dict) else []
+            if not pslist_rows and isinstance(pslist_data, list):
+                pslist_rows = pslist_data
+
+            fam_map = gt_cfg.get("family_process_names", {})
+            lower_map = {k.lower(): v for k, v in fam_map.items()}
+            signatures = [s.lower() for s in lower_map.get(family.lower(), [])]
+
+            for proc in pslist_rows:
+                pid = proc.get("PID")
+                name = proc.get("ImageFileName", "").lower()
+                if isinstance(pid, int):
+                    all_pids.add(pid)
+                    if any(sig in name for sig in signatures):
+                        malicious.add(pid)
+
             metrics = _evaluate(pred, all_pids, malicious)
 
             rows.append(
