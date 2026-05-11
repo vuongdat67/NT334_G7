@@ -43,27 +43,30 @@ def _malicious_set_from_labels(path: Path) -> Set[int]:
     return out
 
 
-def _collect_snapshot_entries(results_dir: Path, labels_dir: Path) -> Dict[str, Any]:
-    report_files = sorted(results_dir.glob("*.report.json"))
+def _collect_snapshot_entries(results_dir: Path, snapshot_to_family: Dict[str, str], gt_cfg_path: str) -> Dict[str, Any]:
+    report_files = sorted(results_dir.rglob("report.json"))
     per_snapshot: List[Dict[str, Any]] = []
     family_results: List[Dict[str, Any]] = []
     skipped: List[Dict[str, str]] = []
 
     for report_path in report_files:
-        stem = report_path.name[: -len(".report.json")]
-        labels_path = labels_dir / f"{stem}.labels.json"
-        votes_path = results_dir / f"{stem}.votes.json"
+        stem = report_path.parent.name
+        artifacts_path = report_path.parent / "artifacts.json"
+        votes_path = report_path.parent / "votes.json"
 
-        if not labels_path.exists():
+        if not artifacts_path.exists():
             skipped.append(
                 {
                     "snapshot": stem,
-                    "reason": f"labels_not_found:{labels_path}",
+                    "reason": f"artifacts_not_found:{artifacts_path}",
                 }
             )
             continue
 
-        metrics = evaluate(str(report_path), str(labels_path))
+        # Get family from manifest or default to unknown
+        family = snapshot_to_family.get(stem.lower(), "unknown")
+
+        metrics = evaluate(str(report_path), str(artifacts_path), family, gt_cfg_path)
 
         report_data = _read_json(report_path)
         suspicious_items = []
@@ -79,17 +82,12 @@ def _collect_snapshot_entries(results_dir: Path, labels_dir: Path) -> Dict[str, 
             if isinstance(votes, list):
                 consistency = consistency_score(votes)
 
-        labels_data = _read_json(labels_path)
-        family = "unknown"
-        if isinstance(labels_data, dict):
-            family = str(labels_data.get("family", "unknown"))
-
         per_snapshot.append(
             {
                 "snapshot": stem,
                 "family": family,
                 "report_path": str(report_path),
-                "labels_path": str(labels_path),
+                "artifacts_path": str(artifacts_path),
                 "votes_path": str(votes_path) if votes_path.exists() else "",
                 "metrics": metrics,
                 "consistency": consistency,
@@ -107,11 +105,11 @@ def _collect_snapshot_entries(results_dir: Path, labels_dir: Path) -> Dict[str, 
             {
                 "family": family,
                 "pred_report_path": str(report_path),
-                "labels_path": str(labels_path),
+                "artifacts_path": str(artifacts_path),
             }
         )
 
-    aggregated = evaluate_multi(family_results)
+    aggregated = evaluate_multi(family_results, gt_cfg_path)
 
     consistency_values = [
         float(x["consistency"]["mean_agreement_rate"])
@@ -140,7 +138,6 @@ def _collect_snapshot_entries(results_dir: Path, labels_dir: Path) -> Dict[str, 
 
     return {
         "results_dir": str(results_dir),
-        "labels_dir": str(labels_dir),
         "overall": overall,
         "family_metrics": aggregated,
         "per_snapshot": per_snapshot,
@@ -151,13 +148,14 @@ def _collect_snapshot_entries(results_dir: Path, labels_dir: Path) -> Dict[str, 
 def _build_mcnemar_section(
     baseline_dir: Path,
     candidate_dir: Path,
-    labels_dir: Path,
+    snapshot_to_family: Dict[str, str],
+    gt_cfg_path: str,
 ) -> Dict[str, Any]:
     baseline_reports = {
-        p.name[: -len(".report.json")]: p for p in baseline_dir.glob("*.report.json")
+        p.parent.name: p for p in baseline_dir.rglob("report.json")
     }
     candidate_reports = {
-        p.name[: -len(".report.json")]: p for p in candidate_dir.glob("*.report.json")
+        p.parent.name: p for p in candidate_dir.rglob("report.json")
     }
 
     matched_stems = sorted(set(baseline_reports.keys()) & set(candidate_reports.keys()))
@@ -167,13 +165,20 @@ def _build_mcnemar_section(
     malicious_sets: List[Set[int]] = []
     used: List[str] = []
 
+    # _labels_from_artifacts returns (all_pids, malicious)
+    # Import it locally to use
+    from src.evaluation.metrics import _labels_from_artifacts
+
     for stem in matched_stems:
-        labels_path = labels_dir / f"{stem}.labels.json"
-        if not labels_path.exists():
+        artifacts_path = baseline_dir / stem / "artifacts.json"
+        if not artifacts_path.exists():
             continue
+        family = snapshot_to_family.get(stem.lower(), "unknown")
+        _, malicious = _labels_from_artifacts(str(artifacts_path), family, gt_cfg_path)
+        
         preds_a.append(_pid_set_from_report(baseline_reports[stem]))
         preds_b.append(_pid_set_from_report(candidate_reports[stem]))
-        malicious_sets.append(_malicious_set_from_labels(labels_path))
+        malicious_sets.append(malicious)
         used.append(stem)
 
     if not used:
@@ -208,12 +213,17 @@ def main() -> int:
     parser.add_argument(
         "--results-dir",
         required=True,
-        help="Directory containing *.report.json and optional *.votes.json",
+        help="Directory containing *.report.json, *.artifacts.json, and optional *.votes.json",
     )
     parser.add_argument(
-        "--labels-dir",
-        default="",
-        help="Directory containing labels files; default: <results-dir>/labels",
+        "--gt-cfg",
+        default="config/ground_truth_process_names.json",
+        help="Path to ground truth signatures JSON",
+    )
+    parser.add_argument(
+        "--manifest",
+        default="results/snapshot_manifest.json",
+        help="Path to snapshot manifest JSON to resolve families",
     )
     parser.add_argument(
         "--compare-dir",
@@ -231,12 +241,21 @@ def main() -> int:
     if not results_dir.exists():
         raise FileNotFoundError(f"results-dir not found: {results_dir}")
 
-    labels_dir = Path(args.labels_dir) if args.labels_dir else results_dir / "labels"
-    if not labels_dir.exists():
-        raise FileNotFoundError(f"labels-dir not found: {labels_dir}")
+    gt_cfg_path = args.gt_cfg
+    if not Path(gt_cfg_path).exists():
+        raise FileNotFoundError(f"gt-cfg not found: {gt_cfg_path}")
+
+    # Load manifest to get family mapping
+    manifest_path = Path(args.manifest)
+    snapshot_to_family = {}
+    if manifest_path.exists():
+        manifest = _read_json(manifest_path)
+        for row in manifest:
+            name = str(row.get("file_name", "")).lower()
+            snapshot_to_family[name] = str(row.get("family", "unknown"))
 
     payload = {
-        "primary": _collect_snapshot_entries(results_dir, labels_dir),
+        "primary": _collect_snapshot_entries(results_dir, snapshot_to_family, gt_cfg_path),
     }
 
     if args.compare_dir:
@@ -246,8 +265,7 @@ def main() -> int:
         payload["comparison"] = {
             "baseline_dir": str(results_dir),
             "candidate_dir": str(compare_dir),
-            "labels_dir": str(labels_dir),
-            "result": _build_mcnemar_section(results_dir, compare_dir, labels_dir),
+            "result": _build_mcnemar_section(results_dir, compare_dir, snapshot_to_family, gt_cfg_path),
         }
 
     out_json = Path(args.out_json)

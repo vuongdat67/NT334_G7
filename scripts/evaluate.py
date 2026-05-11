@@ -14,14 +14,16 @@ from src.cli.help_format import build_standard_parser
 if __name__ == "__main__":
     parser = build_standard_parser(
         prog="evaluate.py",
-        description="Evaluate one triage report against one labels JSON file.",
+        description="Evaluate one triage report dynamically against artifacts.",
         examples=[
-            "python scripts/evaluate.py --pred results/triage_report.json --labels results/labels_example.json",
+            "python scripts/evaluate.py --pred results/triage_report.json --artifacts results/artifacts.json --family WannaCry",
         ],
     )
     parser.add_argument("--pred", required=True, help="Path to prediction report JSON")
-    parser.add_argument("--labels", required=True, help="Path to labels JSON")
+    parser.add_argument("--artifacts", required=True, help="Path to volatile artifacts JSON")
+    parser.add_argument("--family", required=True, help="Family name of the ransomware")
+    parser.add_argument("--gt-cfg", default="config/ground_truth_process_names.json", help="Path to ground truth signatures JSON")
     args = parser.parse_args()
 
-    result = evaluate(args.pred, args.labels)
+    result = evaluate(args.pred, args.artifacts, args.family, args.gt_cfg)
     print(json.dumps(result, ensure_ascii=True, indent=2))

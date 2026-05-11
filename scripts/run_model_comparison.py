@@ -302,11 +302,16 @@ if __name__ == "__main__":
         )
         sys.exit(0)
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     tracker_rows: List[Dict[str, Any]] = []
     all_runs_meta: List[Dict[str, Any]] = []
     skipped_models: List[Dict[str, str]] = []
 
-    for profile in profiles:
+    def evaluate_profile(profile):
+        local_tracker = []
+        local_meta = []
+        local_skipped = []
         model = str(profile.get("model"))
         provider = str(profile.get("provider") or _infer_provider(model))
         model_skipped = False
@@ -345,29 +350,51 @@ if __name__ == "__main__":
             cfg["output_votes_path"] = str(run_dir / "votes.json")
             cfg["output_artifacts_path"] = str(run_dir / "artifacts.json")
 
-            started = time.perf_counter()
-            run_error = ""
+            # Check if already completed successfully
+            already_done = False
+            parse_or_api = ""
             suspicious_count = 0
             dropped_count = 0
-            parse_or_api = ""
+            
+            report_file = Path(cfg["output_report_path"])
+            votes_file = Path(cfg["output_votes_path"])
+            
+            if report_file.exists() and votes_file.exists():
+                try:
+                    existing_votes = json.loads(votes_file.read_text(encoding="utf-8"))
+                    if isinstance(existing_votes, list):
+                        parse_or_api = _pick_error(existing_votes)
+                        if not parse_or_api:
+                            already_done = True
+                            existing_report = json.loads(report_file.read_text(encoding="utf-8"))
+                            suspicious_count = len(existing_report.get("suspicious_processes", []))
+                            dropped_count = int(existing_report.get("post_filter", {}).get("dropped_count", 0))
+                except Exception:
+                    pass
 
-            try:
-                report = run_pipeline_config(cfg)
-                suspicious_count = len(report.get("suspicious_processes", []))
-                dropped_count = int(report.get("post_filter", {}).get("dropped_count", 0))
+            started = time.perf_counter()
+            run_error = ""
 
-                votes_path = Path(cfg["output_votes_path"])
-                if votes_path.exists():
-                    votes = json.loads(votes_path.read_text(encoding="utf-8"))
-                    if isinstance(votes, list):
-                        parse_or_api = _pick_error(votes)
-            except Exception as e:  # noqa: BLE001
-                run_error = str(e)
-                parse_or_api = f"api_error:{run_error}"
+            if already_done:
+                # Skip re-running
+                pass
+            else:
+                try:
+                    report = run_pipeline_config(cfg)
+                    suspicious_count = len(report.get("suspicious_processes", []))
+                    dropped_count = int(report.get("post_filter", {}).get("dropped_count", 0))
+
+                    if votes_file.exists():
+                        votes = json.loads(votes_file.read_text(encoding="utf-8"))
+                        if isinstance(votes, list):
+                            parse_or_api = _pick_error(votes)
+                except Exception as e:  # noqa: BLE001
+                    run_error = str(e)
+                    parse_or_api = f"api_error:{run_error}"
 
             runtime_seconds = round(time.perf_counter() - started, 3)
 
-            tracker_row = {
+            local_tracker.append({
                 "snapshot": snapshot,
                 "model": model,
                 "provider": provider,
@@ -375,23 +402,20 @@ if __name__ == "__main__":
                 "dropped_by_post_filter": dropped_count,
                 "runtime_seconds": runtime_seconds,
                 "parse_error/api_error": parse_or_api,
-            }
-            tracker_rows.append(tracker_row)
+            })
 
-            all_runs_meta.append(
-                {
-                    "snapshot": snapshot,
-                    "memory_dump_path": memory_path,
-                    "model": model,
-                    "provider": provider,
-                    "token_B": profile.get("token_B"),
-                    "runtime_seconds": runtime_seconds,
-                    "error": run_error,
-                    "report_path": cfg["output_report_path"],
-                    "votes_path": cfg["output_votes_path"],
-                    "artifacts_path": cfg["output_artifacts_path"],
-                }
-            )
+            local_meta.append({
+                "snapshot": snapshot,
+                "memory_dump_path": memory_path,
+                "model": model,
+                "provider": provider,
+                "token_B": profile.get("token_B"),
+                "runtime_seconds": runtime_seconds,
+                "error": run_error,
+                "report_path": cfg["output_report_path"],
+                "votes_path": cfg["output_votes_path"],
+                "artifacts_path": cfg["output_artifacts_path"],
+            })
 
             if args.skip_model_on_error and parse_or_api:
                 model_skipped = True
@@ -400,14 +424,22 @@ if __name__ == "__main__":
                 break
 
         if model_skipped:
-            skipped_models.append(
-                {
-                    "model": model,
-                    "provider": provider,
-                    "snapshot": skip_snapshot,
-                    "reason": skip_reason,
-                }
-            )
+            local_skipped.append({
+                "model": model,
+                "provider": provider,
+                "snapshot": skip_snapshot,
+                "reason": skip_reason,
+            })
+            
+        return local_tracker, local_meta, local_skipped
+
+    with ThreadPoolExecutor(max_workers=len(profiles)) as executor:
+        futures = [executor.submit(evaluate_profile, p) for p in profiles]
+        for f in as_completed(futures):
+            t, m, s = f.result()
+            tracker_rows.extend(t)
+            all_runs_meta.extend(m)
+            skipped_models.extend(s)
 
     _write_tracker_csv(tracker_rows, out_csv)
     _write_model_summary(tracker_rows, profiles, out_summary_csv)

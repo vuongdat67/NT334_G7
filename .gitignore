@@ -38,3 +38,6 @@ results/
 deliverables/
 docs/
 trash/
+temp_files.json
+tools/
+*.elf

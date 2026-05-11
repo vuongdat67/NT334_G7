@@ -13,10 +13,32 @@ def _to_pid_set(report_path: str) -> Set[int]:
     return pids
 
 
-def _labels_to_sets(labels_path: str) -> Tuple[Set[int], Set[int]]:
-    data = json.loads(open(labels_path, "r", encoding="utf-8").read())
-    all_pids = set(data.get("all_pids", []))
-    malicious_pids = set(data.get("malicious_pids", []))
+def _labels_from_artifacts(artifacts_path: str, family: str, gt_cfg_path: str) -> Tuple[Set[int], Set[int]]:
+    with open(artifacts_path, "r", encoding="utf-8") as f:
+        artifacts = json.load(f)
+    with open(gt_cfg_path, "r", encoding="utf-8") as f:
+        gt_cfg = json.load(f)
+
+    fam_map = gt_cfg.get("family_process_names", {})
+    lower_map = {k.lower(): v for k, v in fam_map.items()}
+    signatures = [s.lower() for s in lower_map.get(family.lower(), [])]
+
+    all_pids = set()
+    malicious_pids = set()
+
+    pslist_data = artifacts.get("windows.pslist", {})
+    pslist_rows = pslist_data.get("rows", []) if isinstance(pslist_data, dict) else []
+    if not pslist_rows and isinstance(pslist_data, list):
+         pslist_rows = pslist_data
+
+    for row in pslist_rows:
+        pid = row.get("PID")
+        name = row.get("ImageFileName", "").lower()
+        if isinstance(pid, int):
+            all_pids.add(pid)
+            if any(sig in name for sig in signatures):
+                malicious_pids.add(pid)
+
     return all_pids, malicious_pids
 
 
@@ -52,15 +74,16 @@ def _compute_metrics(
     }
 
 
-def evaluate(pred_report_path: str, labels_path: str) -> Dict[str, float]:
-    """Evaluate one prediction report against one labels file."""
+def evaluate(pred_report_path: str, artifacts_path: str, family: str, gt_cfg_path: str) -> Dict[str, float]:
+    """Evaluate one prediction report dynamically using volatile artifacts."""
     pred = _to_pid_set(pred_report_path)
-    all_pids, malicious = _labels_to_sets(labels_path)
+    all_pids, malicious = _labels_from_artifacts(artifacts_path, family, gt_cfg_path)
     return _compute_metrics(pred, all_pids, malicious)
 
 
 def evaluate_multi(
     family_results: List[Dict[str, Any]],
+    gt_cfg_path: str
 ) -> Dict[str, Any]:
     """
     Aggregate per-family metrics and compute macro-averages (Precision, Recall, F1).
@@ -69,22 +92,8 @@ def evaluate_multi(
         family_results: list of dicts, each with:
             - "family"           (str)  ransomware family name
             - "pred_report_path" (str)  path to triage_report.json
-            - "labels_path"      (str)  path to labels JSON
-
-    Returns:
-        {
-          "per_family": { family: {tp, fp, fn, tn, accuracy, precision, recall, f1, ...} },
-          "macro_precision": float,
-          "macro_recall":    float,
-          "macro_f1":        float,
-          "micro_precision": float,   # pooled TP/(TP+FP) across all families
-          "micro_recall":    float,
-          "micro_f1":        float,
-        }
-
-    Macro-F1 is the arithmetic mean of per-family F1 scores (each family weighted equally),
-    consistent with the comparison convention used in related ML baselines (Arfeen et al. 2022).
-    Micro-F1 uses pooled counts — it gives higher weight to larger families.
+            - "artifacts_path"   (str)  path to volatile artifacts JSON
+        gt_cfg_path: path to ground_truth_process_names.json
     """
     per_family: Dict[str, Dict[str, Any]] = {}
 
@@ -122,7 +131,7 @@ def evaluate_multi(
     for entry in family_results:
         family = str(entry.get("family", "unknown"))
         pred = _to_pid_set(entry["pred_report_path"])
-        all_pids, malicious = _labels_to_sets(entry["labels_path"])
+        all_pids, malicious = _labels_from_artifacts(entry["artifacts_path"], family, gt_cfg_path)
         m = _compute_metrics(pred, all_pids, malicious)
 
         if family not in per_family:
