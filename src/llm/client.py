@@ -252,6 +252,12 @@ class LLMClient:
             parsed["raw_response"] = text
             return self._sanitize_suspicious_items(parsed)
 
+        retry = self._retry_json_only(prompt)
+        if retry is not None:
+            retry.setdefault("suspicious_processes", [])
+            retry["retry_json_only"] = True
+            return self._sanitize_suspicious_items(retry)
+
         repaired = self._repair_to_json(text)
         if repaired is not None:
             repaired.setdefault("suspicious_processes", [])
@@ -264,6 +270,52 @@ class LLMClient:
             "raw_response": text,
             "parse_error": True,
         }
+
+    def _retry_json_only(self, prompt: str) -> Optional[Dict[str, Any]]:
+        req: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only a valid JSON object matching the schema. "
+                        "No prose, no markdown, no code fences. "
+                        "Schema: {\"suspicious_processes\":[{\"pid\":0,\"process_name\":\"\",\"reason\":\"\",\"confidence\":0.0}]}"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+        }
+        if self.max_output_tokens is not None:
+            req["max_tokens"] = max(int(self.max_output_tokens), 400)
+
+        if self.force_json_response_format:
+            req["response_format"] = {"type": "json_object"}
+
+        try:
+            self._apply_rpm_delay()
+            resp = self.client.chat.completions.create(**req)
+        except Exception:
+            return None
+
+        text = (resp.choices[0].message.content or "").strip()
+        if not text:
+            return {"suspicious_processes": []}
+
+        parsed = self._extract_json(text)
+        if parsed is None:
+            return None
+
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            parsed["usage"] = {
+                "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+            }
+        parsed["raw_response"] = text
+        return parsed
 
 
 def majority_vote(votes: List[dict]) -> dict:

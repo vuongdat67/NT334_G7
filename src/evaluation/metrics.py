@@ -42,6 +42,21 @@ def _labels_from_artifacts(artifacts_path: str, family: str, gt_cfg_path: str) -
     return all_pids, malicious_pids
 
 
+def _labels_from_labels_path(labels_path: str) -> Tuple[Set[int], Set[int]]:
+    with open(labels_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    all_pids = set()
+    malicious_pids = set()
+    for pid in data.get("all_pids", []) if isinstance(data, dict) else []:
+        if isinstance(pid, int):
+            all_pids.add(pid)
+    for pid in data.get("malicious_pids", []) if isinstance(data, dict) else []:
+        if isinstance(pid, int):
+            malicious_pids.add(pid)
+    return all_pids, malicious_pids
+
+
 def _compute_metrics(
     pred: Set[int],
     all_pids: Set[int],
@@ -74,16 +89,26 @@ def _compute_metrics(
     }
 
 
-def evaluate(pred_report_path: str, artifacts_path: str, family: str, gt_cfg_path: str) -> Dict[str, float]:
-    """Evaluate one prediction report dynamically using volatile artifacts."""
+def evaluate(
+    pred_report_path: str,
+    artifacts_or_labels_path: str,
+    family: str | None = None,
+    gt_cfg_path: str | None = None,
+) -> Dict[str, float]:
+    """Evaluate one prediction report using either artifacts+gt config or labels file."""
     pred = _to_pid_set(pred_report_path)
-    all_pids, malicious = _labels_from_artifacts(artifacts_path, family, gt_cfg_path)
+
+    if family and gt_cfg_path:
+        all_pids, malicious = _labels_from_artifacts(artifacts_or_labels_path, family, gt_cfg_path)
+    else:
+        all_pids, malicious = _labels_from_labels_path(artifacts_or_labels_path)
+
     return _compute_metrics(pred, all_pids, malicious)
 
 
 def evaluate_multi(
     family_results: List[Dict[str, Any]],
-    gt_cfg_path: str
+    gt_cfg_path: str | None = None,
 ) -> Dict[str, Any]:
     """
     Aggregate per-family metrics and compute macro-averages (Precision, Recall, F1).
@@ -93,7 +118,8 @@ def evaluate_multi(
             - "family"           (str)  ransomware family name
             - "pred_report_path" (str)  path to triage_report.json
             - "artifacts_path"   (str)  path to volatile artifacts JSON
-        gt_cfg_path: path to ground_truth_process_names.json
+            - "labels_path"      (str)  optional path to labels JSON
+        gt_cfg_path: path to ground_truth_process_names.json (required if using artifacts)
     """
     per_family: Dict[str, Dict[str, Any]] = {}
 
@@ -131,7 +157,16 @@ def evaluate_multi(
     for entry in family_results:
         family = str(entry.get("family", "unknown"))
         pred = _to_pid_set(entry["pred_report_path"])
-        all_pids, malicious = _labels_from_artifacts(entry["artifacts_path"], family, gt_cfg_path)
+
+        labels_path = entry.get("labels_path")
+        artifacts_path = entry.get("artifacts_path")
+
+        if labels_path:
+            all_pids, malicious = _labels_from_labels_path(str(labels_path))
+        else:
+            if not gt_cfg_path:
+                raise ValueError("gt_cfg_path is required when artifacts_path is used")
+            all_pids, malicious = _labels_from_artifacts(str(artifacts_path), family, gt_cfg_path)
         m = _compute_metrics(pred, all_pids, malicious)
 
         if family not in per_family:

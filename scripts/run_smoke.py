@@ -440,6 +440,7 @@ def main() -> int:
         est_after = _estimate_tokens(preview_prompt_after, args.chars_per_token)
 
     run_cfg["memory_dump_path"] = dump_path
+    run_cfg["decision_rules_inline"] = decision_rules
     run_cfg["output_report_path"] = str(out_dir / f"{snapshot_stem}.report.json")
     run_cfg["output_votes_path"] = str(out_dir / f"{snapshot_stem}.votes.json")
     run_cfg["output_artifacts_path"] = str(out_dir / f"{snapshot_stem}.artifacts.json")

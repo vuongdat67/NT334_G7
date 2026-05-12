@@ -9,16 +9,18 @@ Task:
 Analyze process artifacts from Volatility output and identify suspicious ransomware-related processes.
 
 Data format:
-- pslist: running processes with PID, PPID, process name
+- pslist: running processes with PID, PPID, process name (and image path if available)
 - vadinfo: virtual memory region metadata
 - malfind: suspicious memory regions for injected code
+- cmdline (if present): command-line arguments for processes
 
 Decision constraints:
 1) Use process naming and parent-child relationship signals.
-2) Use VAD permissions and malfind indicators as supporting evidence.
-3) Balance explainability with recall for ransomware-like process chains.
-4) If decision_rules includes family_candidate_process_names and a process name matches, treat it as a high-priority suspicious candidate unless strong benign context disproves it.
-5) Never output text outside the JSON object.
+2) Treat PAGE_EXECUTE_READWRITE as supporting evidence, not sufficient alone (especially for allowlisted system processes).
+3) Require corroboration (malfind MZ/shellcode, suspicious name/parent, or anomalous cmdline/image path) before flagging system processes.
+4) Balance explainability with recall for ransomware-like process chains.
+5) If decision_rules includes family_candidate_process_names and a process name matches, treat it as a high-priority suspicious candidate unless strong benign context disproves it.
+6) Never output text outside the JSON object.
 
 Output JSON schema:
 {

@@ -43,30 +43,58 @@ def _malicious_set_from_labels(path: Path) -> Set[int]:
     return out
 
 
+def _snapshot_stem(report_path: Path) -> str:
+    if report_path.name == "report.json":
+        return report_path.parent.name
+    if report_path.name.endswith(".report.json"):
+        return report_path.name[: -len(".report.json")]
+    return report_path.stem
+
+
+def _collect_report_files(results_dir: Path) -> List[Path]:
+    report_files = set(results_dir.rglob("report.json"))
+    report_files.update(results_dir.rglob("*.report.json"))
+    return sorted(report_files)
+
+
 def _collect_snapshot_entries(results_dir: Path, snapshot_to_family: Dict[str, str], gt_cfg_path: str) -> Dict[str, Any]:
-    report_files = sorted(results_dir.rglob("report.json"))
+    report_files = _collect_report_files(results_dir)
     per_snapshot: List[Dict[str, Any]] = []
     family_results: List[Dict[str, Any]] = []
     skipped: List[Dict[str, str]] = []
 
     for report_path in report_files:
-        stem = report_path.parent.name
-        artifacts_path = report_path.parent / "artifacts.json"
-        votes_path = report_path.parent / "votes.json"
+        stem = _snapshot_stem(report_path)
 
-        if not artifacts_path.exists():
-            skipped.append(
-                {
-                    "snapshot": stem,
-                    "reason": f"artifacts_not_found:{artifacts_path}",
-                }
-            )
-            continue
+        if report_path.name == "report.json":
+            artifacts_path = report_path.parent / "artifacts.json"
+            votes_path = report_path.parent / "votes.json"
+        else:
+            artifacts_path = report_path.parent / f"{stem}.artifacts.json"
+            votes_path = report_path.parent / f"{stem}.votes.json"
+
+        labels_path = results_dir / "labels" / f"{stem}.labels.json"
+        if not labels_path.exists():
+            labels_path = report_path.parent / "labels" / f"{stem}.labels.json"
 
         # Get family from manifest or default to unknown
         family = snapshot_to_family.get(stem.lower(), "unknown")
+        if family == "unknown" and labels_path.exists():
+            label_data = _read_json(labels_path)
+            family = str(label_data.get("family", family)) if isinstance(label_data, dict) else family
 
-        metrics = evaluate(str(report_path), str(artifacts_path), family, gt_cfg_path)
+        if artifacts_path.exists():
+            metrics = evaluate(str(report_path), str(artifacts_path), family, gt_cfg_path)
+        elif labels_path.exists():
+            metrics = evaluate(str(report_path), str(labels_path))
+        else:
+            skipped.append(
+                {
+                    "snapshot": stem,
+                    "reason": f"artifacts_or_labels_not_found:{artifacts_path}",
+                }
+            )
+            continue
 
         report_data = _read_json(report_path)
         suspicious_items = []
@@ -101,13 +129,15 @@ def _collect_snapshot_entries(results_dir: Path, snapshot_to_family: Dict[str, s
             }
         )
 
-        family_results.append(
-            {
-                "family": family,
-                "pred_report_path": str(report_path),
-                "artifacts_path": str(artifacts_path),
-            }
-        )
+        family_entry = {
+            "family": family,
+            "pred_report_path": str(report_path),
+        }
+        if artifacts_path.exists():
+            family_entry["artifacts_path"] = str(artifacts_path)
+        elif labels_path.exists():
+            family_entry["labels_path"] = str(labels_path)
+        family_results.append(family_entry)
 
     aggregated = evaluate_multi(family_results, gt_cfg_path)
 
@@ -151,12 +181,8 @@ def _build_mcnemar_section(
     snapshot_to_family: Dict[str, str],
     gt_cfg_path: str,
 ) -> Dict[str, Any]:
-    baseline_reports = {
-        p.parent.name: p for p in baseline_dir.rglob("report.json")
-    }
-    candidate_reports = {
-        p.parent.name: p for p in candidate_dir.rglob("report.json")
-    }
+    baseline_reports = { _snapshot_stem(p): p for p in _collect_report_files(baseline_dir) }
+    candidate_reports = { _snapshot_stem(p): p for p in _collect_report_files(candidate_dir) }
 
     matched_stems = sorted(set(baseline_reports.keys()) & set(candidate_reports.keys()))
 
@@ -165,16 +191,27 @@ def _build_mcnemar_section(
     malicious_sets: List[Set[int]] = []
     used: List[str] = []
 
-    # _labels_from_artifacts returns (all_pids, malicious)
-    # Import it locally to use
-    from src.evaluation.metrics import _labels_from_artifacts
+    # Import label helpers locally
+    from src.evaluation.metrics import _labels_from_artifacts, _labels_from_labels_path
 
     for stem in matched_stems:
-        artifacts_path = baseline_dir / stem / "artifacts.json"
-        if not artifacts_path.exists():
-            continue
+        if baseline_reports[stem].name == "report.json":
+            artifacts_path = baseline_dir / stem / "artifacts.json"
+        else:
+            artifacts_path = baseline_reports[stem].parent / f"{stem}.artifacts.json"
+
+        labels_path = baseline_dir / "labels" / f"{stem}.labels.json"
+        if not labels_path.exists():
+            labels_path = baseline_reports[stem].parent / "labels" / f"{stem}.labels.json"
+
         family = snapshot_to_family.get(stem.lower(), "unknown")
-        _, malicious = _labels_from_artifacts(str(artifacts_path), family, gt_cfg_path)
+
+        if artifacts_path.exists():
+            _, malicious = _labels_from_artifacts(str(artifacts_path), family, gt_cfg_path)
+        elif labels_path.exists():
+            _, malicious = _labels_from_labels_path(str(labels_path))
+        else:
+            continue
         
         preds_a.append(_pid_set_from_report(baseline_reports[stem]))
         preds_b.append(_pid_set_from_report(candidate_reports[stem]))

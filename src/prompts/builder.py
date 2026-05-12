@@ -8,6 +8,14 @@ PREFERRED_ROW_KEYS = [
     "name",
     "process_name",
     "ImageFileName",
+    "ImagePath",
+    "ExePath",
+    "path",
+    "Path",
+    "commandline",
+    "CommandLine",
+    "cmdline",
+    "CmdLine",
     "Process",
     "Parent",
     "parent_name",
@@ -42,6 +50,17 @@ DEFAULT_FEW_SHOT = {
                 "parent_name": "services.exe",
             },
             "analysis": "Expected Windows process hierarchy.",
+            "label": "normal",
+        },
+        {
+            "input": {
+                "pid": 2160,
+                "ppid": 568,
+                "name": "explorer.exe",
+                "parent_name": "winlogon.exe",
+                "vad_suspicious": [{"protection": "PAGE_EXECUTE_READWRITE"}],
+            },
+            "analysis": "RWX alone on an allowlisted system process is insufficient without malfind or suspicious lineage.",
             "label": "normal",
         },
     ],
@@ -324,7 +343,7 @@ def _build_strategy_block(strategy: str, ransomware_hint: str) -> str:
             "\n\nAnalysis strategy: High-recall forensic triage."
             "\n1) Prioritize catching potential ransomware lineage over strict pruning."
             "\n2) If parent process is suspicious, investigate direct children aggressively."
-            "\n3) Treat RWX VAD or malfind signals as strong escalation factors."
+            "\n3) Treat RWX VAD as supporting evidence; treat malfind MZ/shellcode as strong escalation."
             "\n4) When uncertain but evidence exists, keep process with medium confidence."
             "\n5) If decision_rules.family_candidate_process_names is present and a pslist name matches,"
             " include that PID as suspicious unless strong benign evidence contradicts it."
@@ -336,7 +355,7 @@ def _build_strategy_block(strategy: str, ransomware_hint: str) -> str:
         "\n\nAnalysis strategy: Structured forensic checklist."
         "\n1) Validate process names against known Windows system processes."
         "\n2) Review parent-child relationships for anomalies."
-        "\n3) Prioritize RWX VAD and malfind indicators."
+        "\n3) Correlate RWX VAD with malfind or suspicious lineage before flagging."
         "\n4) Flag suspicious lineage cascade only with concrete parent evidence."
         "\n5) Return final JSON only."
     )
@@ -349,6 +368,7 @@ def _build_hallucination_block() -> str:
         "\n- Avoid generic claims not grounded in given fields."
         "\n- For system process names (svchost.exe, explorer.exe, lsass.exe), require strong corroboration"
         "  such as malfind or suspicious parent chain."
+        "\n- PAGE_EXECUTE_READWRITE alone is supporting evidence; do not flag allowlisted processes without corroboration."
     )
 
 

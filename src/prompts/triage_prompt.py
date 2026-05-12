@@ -10,15 +10,17 @@ Your task is to identify suspicious Windows processes that may be linked to rans
 
 Rules:
 1. Standard Windows system processes are normal unless there is strong contradictory evidence.
-2. Suspicious indicators include random-like names, known malware names, suspicious parent chains, RWX VAD, malfind MZ/shellcode.
-3. Return only valid JSON as requested in the output template.
+2. RWX VAD (PAGE_EXECUTE_READWRITE) is supporting evidence only; require corroboration for system processes.
+3. Strong indicators include random-like names, known malware names, suspicious parent chains, malfind MZ/shellcode, or anomalous cmdline/path.
+4. Return only valid JSON as requested in the output template.
 """
 
 DECISION_RULES = """TRIAGE DECISION RULES:
 [RULE1] Process name: random strings, known ransomware names, or typo-masquerade names are suspicious.
 [RULE2] Parent-child: benign binaries spawned by suspicious parent should be escalated.
-[RULE3] VAD: PAGE_EXECUTE_READWRITE regions are strong injection indicators.
+[RULE3] VAD: PAGE_EXECUTE_READWRITE is supporting evidence; require malfind MZ/shellcode or suspicious lineage/path to flag system processes.
 [RULE4] Malfind: MZ header or shellcode patterns indicate injected payload.
+[RULE5] Cmdline/ImagePath: system-named processes running from non-system paths or with suspicious args (e.g., vssadmin delete) are suspicious.
 """
 
 JSON_SCHEMA_GUIDE = """INPUT DATA SCHEMA:

@@ -54,9 +54,6 @@ DEFAULT_STRONG_REASON_KEYWORDS = {
     "inject",
     "injection",
     "malfind",
-    "page_execute_readwrite",
-    "execute_readwrite",
-    "rwx",
     "mz",
     "pe header",
 }
@@ -69,6 +66,9 @@ DEFAULT_GENERIC_REASON_KEYWORDS = {
     "not enough information",
     "uncertain",
     "generic",
+    "page_execute_readwrite",
+    "execute_readwrite",
+    "rwx",
 }
 
 

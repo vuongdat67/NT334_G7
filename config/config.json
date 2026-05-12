@@ -1,10 +1,11 @@
 {
-  "volatility_script_path": "~/tools/volatility3/vol.py",
+  "volatility_script_path": "D:\\NT334_G7\\volatility3\\vol.py",
   "memory_dump_path": "",
   "volatility_plugins": [
     "windows.pslist",
     "windows.vadinfo",
-    "windows.malfind"
+    "windows.malfind",
+    "windows.cmdline"
   ],
   "_volatility_plugins_optional_note": "Add 'windows.psscan' to enable hidden-process detection (pslist vs psscan diff). Add 'windows.cmdline' for process command-line args. These increase runtime but surface additional signals.",
   "volatility_plugin_timeout_seconds": 240,
@@ -30,7 +31,8 @@
     "default": 40,
     "windows.pslist": 40,
     "windows.vadinfo": 20,
-    "windows.malfind": 15
+    "windows.malfind": 15,
+    "windows.cmdline": 20
   },
   "artifact_max_json_chars": 3500,
   "post_filter_enabled": true,

@@ -40,7 +40,9 @@ def run_pipeline_config(cfg: dict) -> dict:
         )
 
     prompt_template = Path(cfg["prompt_template_path"]).read_text(encoding="utf-8")
-    decision_rules = load_json(cfg["decision_rules_path"])
+    decision_rules = cfg.get("decision_rules_inline")
+    if not isinstance(decision_rules, dict):
+        decision_rules = load_json(cfg["decision_rules_path"])
 
     volatility_plugin_timeout_seconds = cfg.get("volatility_plugin_timeout_seconds")
     volatility = VolatilityRunner(

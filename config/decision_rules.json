@@ -1,12 +1,18 @@
 {
   "pslist": [
     "Flag suspicious when process name appears random or known malware-like",
-    "Flag suspicious when parent-child relation is unusual for system processes"
+    "Flag suspicious when parent-child relation is unusual for system processes",
+    "If cmd.exe, vssadmin.exe, or vssvc.exe is spawned by a suspicious parent, flag as suspicious",
+    "Do not flag allowlisted system processes solely because of RWX VAD without corroboration"
   ],
   "vadinfo": [
-    "Increase suspicion when protection includes PAGE_EXECUTE_READWRITE"
+    "Treat PAGE_EXECUTE_READWRITE as supporting evidence; require malfind MZ/shellcode or suspicious lineage/path before flagging"
   ],
   "malfind": [
     "Increase suspicion when memory region contains MZ header or shellcode-like bytes"
+  ],
+  "cmdline": [
+    "Flag system-named processes that run from non-system paths or have suspicious command-line arguments",
+    "Treat vssadmin delete/shadow copy removal commands as strong ransomware signals"
   ]
 }
