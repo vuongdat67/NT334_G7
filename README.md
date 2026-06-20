@@ -3,6 +3,9 @@
 This repository starts a fresh implementation inspired by the paper:
 volGPT: Evaluation on triaging ransomware process in memory forensics with Large Language Model (FSI:DI, 2024).
 
+## Dataset used
+https://doi.org/10.7910/DVN/YVL3CW
+
 ## 1) Project Goal
 
 Build a reproducible memory-forensics triage pipeline:
